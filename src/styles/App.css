@@ -1,0 +1,4 @@
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--p:#667eea;--s:#764ba2;--g:#51cf66;--r:#ff6b6b;--bg:#f5f5fa;--amber:#e67700}
+body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:#333;min-height:100vh}
+#loginForm,#signupForm{display:flex;flex-direction:column;gap:12px}
