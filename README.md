@@ -1,1 +1,0 @@
-# SAP-SD-Interview-prep
