@@ -32,7 +32,7 @@ CREATE POLICY "Admin can view all feedback" ON feedback
 -- signed up on the live site with the account you want as admin.
 -- ============================================================
 
--- UPDATE profiles SET is_admin = TRUE WHERE email = 'youradmin@email.com';
+-- UPDATE profiles SET is_admin = TRUE WHERE email = 'sivabrahmawork@email.com';
 
 -- To verify it worked:
 -- SELECT id, email, is_admin FROM profiles WHERE is_admin = TRUE;
