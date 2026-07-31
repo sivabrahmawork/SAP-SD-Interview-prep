@@ -1,7 +1,7 @@
 import React,{useState,useEffect,useCallback} from 'react';
 import {SECTIONS,TCODES,SE16N,ADVANCED,FINAL_TEST,CHEATSHEETS} from './data/sections';
 import QUESTION_BANK from './data/questionBankIndex';
-import {signUp,signIn,signOut,saveResult,getResults,saveFeedback,updateProfile,changePassword,adminGetAllUsers,adminGetAllResults,adminGetAllFeedback,isLocalMode} from './lib/storage';
+import {signUp,signIn,signOut,saveResult,getResults,saveFeedback,updateProfile,changePassword,adminGetAllUsers,adminGetAllResults,adminGetAllFeedback,isLocalMode,checkIsAdmin} from './lib/storage';
 
 const ADMIN_PIN='SD2025hub';
 
@@ -268,6 +268,7 @@ function AdminScreen({user,onBack,toast}){
   const[stats,setStats]=useState(null);
   const[loading,setLoading]=useState(false);
   const[loadErr,setLoadErr]=useState('');
+  const[denied,setDenied]=useState(false);
 
   const loadStats=async()=>{
     setLoading(true);setLoadErr('');
@@ -278,23 +279,37 @@ function AdminScreen({user,onBack,toast}){
       results.forEach(r=>{topSections[r.sectionId]=(topSections[r.sectionId]||0)+1;});
       const sortedSections=Object.entries(topSections).sort((a,b)=>b[1]-a[1]).slice(0,5);
       setStats({users,results,feedback,avgScore,sortedSections});
-      // If Supabase mode and we got back only our own row (RLS blocked cross-user access),
-      // surface that clearly instead of pretending there's 1 total user.
-      if(!isLocalMode && users.length<=1){
-        setLoadErr('Only seeing your own account. This usually means is_admin isn\'t set to TRUE for this login in Supabase — see admin-migration.sql.');
-      }
     }catch(e){
-      setLoadErr(e.message||'Could not load admin data. Check Supabase RLS policies.');
+      setLoadErr(e.message||'Could not load admin data.');
     }
     setLoading(false);
   };
 
-  const handlePin=()=>{
-    if(pin===ADMIN_PIN){
-      setAuthed(true);
-      loadStats();
-    }else{alert('Incorrect PIN');}
+  const handlePin=async()=>{
+    if(pin!==ADMIN_PIN){alert('Incorrect PIN');return;}
+    setLoading(true);
+    // Real authorization check — the PIN is just a UI gate. This confirms
+    // the logged-in account is actually flagged as admin in the database.
+    const isAdmin=await checkIsAdmin(user.id);
+    if(!isAdmin){
+      setDenied(true);
+      setLoading(false);
+      return;
+    }
+    setAuthed(true);
+    loadStats();
   };
+
+  if(denied) return(
+    <div className="app">
+      <nav className="navbar"><h1 className="logo">Admin Console</h1><div className="nav-right"><button className="btn-back" onClick={onBack}>← Back</button></div></nav>
+      <div className="main-card" style={{maxWidth:420,margin:'60px auto'}}>
+        <div className="cs-trap"><h4>Access Denied</h4><p>This account isn't authorized for admin access. Contact the platform administrator if you believe this is a mistake.</p></div>
+        <button className="btn-back" onClick={onBack} style={{marginTop:12}}>← Back to Hub</button>
+      </div>
+      {toast&&<div className="toast">{toast}</div>}
+    </div>
+  );
 
   if(!authed) return(
     <div className="app">
@@ -302,10 +317,10 @@ function AdminScreen({user,onBack,toast}){
       <div className="main-card" style={{maxWidth:420,margin:'60px auto'}}>
         <h2 style={{marginBottom:16}}>Admin Access</h2>
         <p className="subtitle">Enter the admin PIN to access the dashboard.</p>
-        {!isLocalMode&&<p className="subtitle" style={{marginTop:-8,fontSize:11}}>Logged in as: {user?.email}. This account must be flagged is_admin in Supabase.</p>}
+        {!isLocalMode&&<p className="subtitle" style={{marginTop:-8,fontSize:11}}>Logged in as: {user?.email}</p>}
         <div style={{display:'flex',flexDirection:'column',gap:10}}>
           <input type="password" value={pin} onChange={e=>setPin(e.target.value)} placeholder="Enter PIN" onKeyDown={e=>e.key==='Enter'&&handlePin()} style={{padding:'10px 12px',border:'1px solid #e4e4ec',borderRadius:8,fontSize:14}}/>
-          <button className="btn-submit" onClick={handlePin}>Access Dashboard</button>
+          <button className="btn-submit" onClick={handlePin} disabled={loading}>{loading?'Checking...':'Access Dashboard'}</button>
         </div>
       </div>
       {toast&&<div className="toast">{toast}</div>}
@@ -533,7 +548,7 @@ function AuthScreen({onLogin,showToast,toast}){
     <div className="auth-screen">
       <div className="auth-box">
         <h1>SAP Interview Hub</h1>
-        <p className="subtitle">Master SAP for your next interview</p>
+        <p className="subtitle">Master SAP SD for your next interview</p>
         <div className="auth-toggle">
           <button className={mode==='login'?'active':''} onClick={()=>setMode('login')}>Login</button>
           <button className={mode==='signup'?'active':''} onClick={()=>setMode('signup')}>Sign Up</button>

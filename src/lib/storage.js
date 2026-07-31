@@ -133,6 +133,21 @@ export async function saveFeedback({ userId, sectionId, difficulty, clarity, sug
 // their own row back — RLS enforces this at the database level, not here.
 export const isLocalMode = useLocal;
 
+// Real authorization check — the PIN alone is just a UI gate. This confirms
+// the CURRENT logged-in user actually has is_admin = true in the database.
+// Every user can read their own profile row (base RLS policy), so this
+// works regardless of the admin-only cross-user policies.
+export async function checkIsAdmin(userId) {
+    if (useLocal) {
+        // No real admin concept in localStorage mode — treat as admin so
+        // the console is usable for local testing.
+        return true;
+    }
+    const { data, error } = await supabase.from('profiles').select('is_admin').eq('id', userId).single();
+    if (error) return false;
+    return data?.is_admin === true;
+}
+
 export async function adminGetAllUsers() {
     if (useLocal) {
         const data = getLocal();
