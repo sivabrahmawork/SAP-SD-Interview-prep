@@ -1,4 +1,4 @@
-# SAP SD Mastery Hub v3
+# SAP Interview Hub v3
 
 Interview preparation platform for SAP Sales & Distribution functional consultants.
 
