@@ -533,7 +533,7 @@ function AuthScreen({onLogin,showToast,toast}){
     <div className="auth-screen">
       <div className="auth-box">
         <h1>SAP Interview Hub</h1>
-        <p className="subtitle">Master SAP SD for your next interview</p>
+        <p className="subtitle">Master SAP for your next interview</p>
         <div className="auth-toggle">
           <button className={mode==='login'?'active':''} onClick={()=>setMode('login')}>Login</button>
           <button className={mode==='signup'?'active':''} onClick={()=>setMode('signup')}>Sign Up</button>
