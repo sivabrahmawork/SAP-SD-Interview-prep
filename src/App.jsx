@@ -1,7 +1,7 @@
 import React,{useState,useEffect,useCallback} from 'react';
 import {SECTIONS,TCODES,SE16N,ADVANCED,FINAL_TEST,CHEATSHEETS} from './data/sections';
 import QUESTION_BANK from './data/questionBankIndex';
-import {signUp,signIn,signOut,saveResult,getResults,saveFeedback,updateProfile,changePassword,adminGetAllUsers,adminGetAllResults,adminGetAllFeedback,isLocalMode,checkIsAdmin} from './lib/storage';
+import {signUp,signIn,signOut,saveResult,getResults,saveFeedback,updateProfile,changePassword,adminGetAllUsers,adminGetAllResults,adminGetAllFeedback,isLocalMode,checkIsAdmin,signInWithGoogle,getCurrentUser,subscribeAuthChanges} from './lib/storage';
 
 const ADMIN_PIN='SD2025hub';
 
@@ -38,6 +38,7 @@ const SPECIAL_TABS = [
 
 export default function App(){
   const[user,setUser]=useState(null);
+  const[checkingSession,setCheckingSession]=useState(true);
   const[section,setSection]=useState(null);
   const[tab,setTab]=useState('concepts');
   const[level,setLevel]=useState('junior');
@@ -51,6 +52,21 @@ export default function App(){
   const[qbLevel,setQbLevel]=useState('junior');
   const[expandedQ,setExpandedQ]=useState({});
 
+  // On first load: check if a Supabase session already exists (e.g. page
+  // refresh, or returning from a Google OAuth redirect). Then keep listening
+  // for auth changes so a completed Google sign-in updates the app without
+  // needing a manual refresh.
+  useEffect(()=>{
+    let active=true;
+    getCurrentUser().then(u=>{
+      if(active){setUser(u);setCheckingSession(false);}
+    }).catch(()=>{if(active)setCheckingSession(false);});
+    const unsubscribe=subscribeAuthChanges(u=>{
+      if(active)setUser(u);
+    });
+    return ()=>{active=false;unsubscribe();};
+  },[]);
+
   const showToast=useCallback((msg)=>{setToast(msg);setTimeout(()=>setToast(''),3000);},[]);
   const loadResults=useCallback(async(sid)=>{
     if(!user)return;
@@ -58,6 +74,7 @@ export default function App(){
   },[user]);
   useEffect(()=>{if(section)loadResults(section);},[section,loadResults]);
 
+  if(checkingSession) return <div className="app" style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}><p style={{color:'#6b6b80',fontSize:14}}>Loading...</p></div>;
   if(!user) return <AuthScreen onLogin={setUser} showToast={showToast} toast={toast}/>;
   if(showAdmin) return <AdminScreen user={user} onBack={()=>setShowAdmin(false)} toast={toast}/>;
   if(showProfile) return <ProfileScreen user={user} setUser={setUser} onBack={()=>setShowProfile(false)} showToast={showToast} toast={toast}/>;
@@ -530,6 +547,7 @@ function ProfileScreen({user,setUser,onBack,showToast,toast}){
 function AuthScreen({onLogin,showToast,toast}){
   const[mode,setMode]=useState('login');
   const[loading,setLoading]=useState(false);
+  const[googleLoading,setGoogleLoading]=useState(false);
   const handleSubmit=async(e)=>{
     e.preventDefault();setLoading(true);
     const fd=new FormData(e.target);
@@ -543,6 +561,12 @@ function AuthScreen({onLogin,showToast,toast}){
       }
     }catch(err){showToast(err.message||'Error');}
     setLoading(false);
+  };
+  const handleGoogle=async()=>{
+    setGoogleLoading(true);
+    try{
+      await signInWithGoogle(); // redirects the page away — no code runs after this on success
+    }catch(err){showToast(err.message||'Could not start Google sign-in');setGoogleLoading(false);}
   };
   return(
     <div className="auth-screen">
@@ -563,6 +587,13 @@ function AuthScreen({onLogin,showToast,toast}){
           <input name="password" type="password" placeholder="Password *" required minLength="6"/>
           <button type="submit" className="btn-auth" disabled={loading}>{loading?'Processing...':mode==='login'?'Login':'Create Account'}</button>
         </form>
+        {!isLocalMode&&<>
+          <div className="auth-divider"><span>or</span></div>
+          <button type="button" className="btn-google" onClick={handleGoogle} disabled={googleLoading}>
+            <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.95H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.05l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.59-2.59C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+            {googleLoading?'Redirecting...':'Continue with Google'}
+          </button>
+        </>}
       </div>
       {toast&&<div className="toast">{toast}</div>}
     </div>
