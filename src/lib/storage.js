@@ -57,6 +57,64 @@ export async function signOut() {
     if (!useLocal && supabase) await supabase.auth.signOut();
 }
 
+// ---- Google OAuth ----
+// Redirects the whole page to Google, then back to your site. There's no
+// return value to use here — the actual session gets picked up by
+// getCurrentUser() / subscribeAuthChanges() below, after the redirect completes.
+export async function signInWithGoogle() {
+    if (useLocal) throw new Error('Google sign-in requires Supabase to be configured');
+    const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin }
+    });
+    if (error) throw error;
+}
+
+// Normalizes a Supabase profile row into the same user object shape used
+// throughout the app, regardless of whether they signed up via email or Google.
+function normalizeProfile(authUser, profile) {
+    return {
+        id: authUser.id,
+        email: authUser.email,
+        fullName: profile?.full_name || '',
+        gender: profile?.gender || '',
+        dob: profile?.dob || '',
+        company: profile?.company || '',
+        country: profile?.country || '',
+        notificationsEnabled: profile?.notifications_enabled ?? false,
+        questionNotifEnabled: profile?.question_notif_enabled ?? false,
+        questionNotifModule: profile?.question_notif_module || 'SAP SD',
+        questionNotifDifficulty: profile?.question_notif_difficulty || 'easy',
+    };
+}
+
+// Checks whether a Supabase session already exists (e.g. after a page
+// refresh, or right after the Google OAuth redirect completes). Returns
+// null if not logged in or in local storage mode.
+export async function getCurrentUser() {
+    if (useLocal) return null;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) return null;
+    const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+    return normalizeProfile(session.user, profile);
+}
+
+// Subscribes to auth state changes (sign-in, sign-out, token refresh).
+// Used so the app can react the moment a Google OAuth redirect completes,
+// without the user needing to manually refresh. Returns an unsubscribe function.
+export function subscribeAuthChanges(callback) {
+    if (useLocal) return () => {};
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_OUT' || !session?.user) {
+            callback(null);
+            return;
+        }
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+        callback(normalizeProfile(session.user, profile));
+    });
+    return () => subscription?.unsubscribe();
+}
+
 // ---- Profile ----
 export async function getProfile(userId) {
     if (useLocal) {
