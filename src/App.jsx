@@ -6,18 +6,16 @@ import QUESTION_BANK_FICO from './data/questionBankFico';
 import {RAR_SECTIONS,RAR_ROTATION_TABS,RAR_CHEATSHEETS} from './data/sectionsRar';
 import QUESTION_BANK_RAR from './data/questionBankRar';
 import {signUp,signIn,signOut,saveResult,getResults,saveFeedback,updateProfile,changePassword,adminGetAllUsers,adminGetAllResults,adminGetAllFeedback,isLocalMode,checkIsAdmin,signInWithGoogle,getCurrentUser,subscribeAuthChanges} from './lib/storage';
+import './styles/App.css';
 
 const ADMIN_PIN='SD2025hub';
 
-// Deterministic daily pick: same user + same day = same question, no server needed.
 function simpleHash(str){
   let h=0;
   for(let i=0;i<str.length;i++){h=((h<<5)-h+str.charCodeAt(i))|0;}
   return Math.abs(h);
 }
-// Part 6 (FICO Master Build File) â€” rotation length is per-module, not hardcoded.
-// SD stays 14 days. FICO = 18 (FI Day 1-10 + CO Day 1-8). RAR = 7 days.
-// Overflow and Integration tabs sit outside the rotation for each.
+
 const MODULES = {
   sd:{
     key:'sd',label:'SAP SD',rotationDays:14,
@@ -36,28 +34,26 @@ const MODULES = {
   },
 };
 
-function getTodaysQuestion(user,moduleKey){
-  if(!user?.questionNotifEnabled) return null;
+function pickTodaysQuestion(userId,moduleKey){
   const mod=MODULES[moduleKey]||MODULES.sd;
-  const diff=user.questionNotifDifficulty||'easy';
+  const bank=mod.questionBank;
+  if(!bank||bank.length===0) return null;
   const today=new Date().toISOString().split('T')[0];
-  const hash=simpleHash(`${user.id}${today}${moduleKey}`);
-  const dayIndex=hash%mod.rotationDays;
-  const tabId=mod.rotationTabs[dayIndex];
-  const tab=mod.sections.find(s=>s.id===tabId);
-  if(!tab) return null;
-  const pool=diff==='easy'?tab.junior:tab.senior;
-  if(!pool||pool.length===0) return null;
-  const qIndex=hash%pool.length;
-  return pool[qIndex];
+  const hash=simpleHash(userId+today+moduleKey);
+  return bank[hash%bank.length];
 }
 
-function App(){
+function renderCheatsheet(content){
+  if(!content) return null;
+  return <div className="cheatsheet" dangerouslySetInnerHTML={{__html:content}}/>;
+}
+
+export default function App(){
   const [user,setUser]=useState(null);
   const [activeModule,setActiveModule]=useState('sd');
-  const [view,setView]=useState('home');
   const [selectedTab,setSelectedTab]=useState(null);
   const [quizMode,setQuizMode]=useState(false);
+  const [view,setView]=useState('signin');
   const [answers,setAnswers]=useState({});
   const [submitted,setSubmitted]=useState(false);
   const [results,setResults]=useState(null);
@@ -71,53 +67,47 @@ function App(){
   const [allFeedback,setAllFeedback]=useState([]);
   const [userResults,setUserResults]=useState([]);
   const [editingProfile,setEditingProfile]=useState(false);
+  const [profileForm,setProfileForm]=useState({fullName:'',gender:'',dob:'',company:'',country:''});
+  const [showCheatsheet,setShowCheatsheet]=useState(false);
 
-  // Auth subscription
   useEffect(()=>{
-    const unsub=subscribeAuthChanges(async(authUser)=>{
+    const unsubscribe=subscribeAuthChanges(async(authUser)=>{
+      setUser(authUser);
       if(authUser){
-        const userData=await getCurrentUser();
-        setUser({...userData,id:authUser.uid});
-      }else{
-        setUser(null);
+        const res=await getResults(authUser.id);
+        setUserResults(res||[]);
+        setActiveModule(authUser.activeModule||'sd');
       }
       setLoading(false);
     });
-    return ()=>unsub();
+    return ()=>unsubscribe();
   },[]);
 
-  // Load user results
-  useEffect(()=>{
-    if(user&&!isAdmin){
-      getResults(user.id).then(setUserResults);
+  const handleSignUp=async(fullName,gender,dob,company,country,email,password)=>{
+    try{
+      await signUp(email,password,{fullName,gender,dob,company,country});
+      setView('signin');
+      alert('Account created! Please sign in.');
+    }catch(e){
+      alert('Sign up failed: '+e.message);
     }
-  },[user,isAdmin]);
+  };
 
-  // Admin check
-  useEffect(()=>{
-    if(user&&adminPin===ADMIN_PIN){
-      checkIsAdmin(user.id).then(admin=>{
-        setIsAdmin(admin);
-        if(admin){
-          adminGetAllUsers().then(setAllUsers);
-          adminGetAllResults().then(setAllResults);
-          adminGetAllFeedback().then(setAllFeedback);
-        }
-      });
+  const handleSignIn=async(email,password)=>{
+    try{
+      await signIn(email,password);
+      setView('home');
+    }catch(e){
+      alert('Sign in failed: '+e.message);
     }
-  },[user,adminPin]);
+  };
 
-  const handleSignUp=async(email,pass)=>{
-    try{await signUp(email,pass); setView('home');}catch(e){alert(e.message);}
-  };
-  const handleSignIn=async(email,pass)=>{
-    try{await signIn(email,pass); setView('home');}catch(e){alert(e.message);}
-  };
-  const handleSignOut=async()=>{
-    await signOut(); setUser(null); setView('home');
-  };
   const handleSignInGoogle=async()=>{
-    try{await signInWithGoogle(); setView('home');}catch(e){alert(e.message);}
+    try{
+      await signInWithGoogle();
+    }catch(e){
+      alert('Google sign-in failed: '+e.message);
+    }
   };
 
   const handleAnswer=(qIndex,optIndex)=>{
@@ -125,18 +115,15 @@ function App(){
   };
 
   const handleSubmitQuiz=async()=>{
-    if(!selectedTab||!user) return;
+    if(!user) return;
     const mod=MODULES[activeModule];
-    const tab=mod.sections.find(s=>s.id===selectedTab);
-    if(!tab) return;
-    const diff=tab.junior.length>0?'junior':'senior';
-    const pool=diff==='junior'?tab.junior:tab.senior;
+    const pool=selectedTab?mod.questionBank.filter(q=>q.section===selectedTab):[];
     let correct=0;
     pool.forEach((q,i)=>{
-      if(answers[i]===q.ans) correct++;
+      if(answers[i]===q.correct) correct++;
     });
     const score=Math.round((correct/pool.length)*100);
-    await saveResult(user.id,activeModule,selectedTab,score);
+    await saveResult(user.id,activeModule,selectedTab,score,pool.length);
     setResults({score,total:pool.length,correct});
     setSubmitted(true);
   };
@@ -155,7 +142,28 @@ function App(){
       setUser({...user,...updates});
       setEditingProfile(false);
       alert('Profile updated!');
-    }catch(e){alert(e.message);}
+    }catch(e){
+      alert(e.message);
+    }
+  };
+
+  const handleAdminPin=async()=>{
+    if(adminPin===ADMIN_PIN){
+      const isAdm=await checkIsAdmin(user.id);
+      if(isAdm){
+        setIsAdmin(true);
+        const users=await adminGetAllUsers();
+        const results=await adminGetAllResults();
+        const fb=await adminGetAllFeedback();
+        setAllUsers(users||[]);
+        setAllResults(results||[]);
+        setAllFeedback(fb||[]);
+      }else{
+        alert('Not an admin user');
+      }
+    }else{
+      alert('Invalid PIN');
+    }
   };
 
   if(loading) return <div style={{textAlign:'center',marginTop:'50px'}}>Loading...</div>;
@@ -163,208 +171,359 @@ function App(){
   const mod=MODULES[activeModule];
   const selectedTabObj=selectedTab?mod.sections.find(s=>s.id===selectedTab):null;
 
+  // LOGIN SCREEN
   if(!user) return (
-    <div style={{maxWidth:'400px',margin:'50px auto',padding:'20px',border:'1px solid #ccc',borderRadius:'8px'}}>
-      <h2>SAP Interview Hub</h2>
-      <div style={{display:'flex',gap:'10px',marginBottom:'15px'}}>
-        <button onClick={()=>setView('signin')} style={{flex:1,padding:'10px'}}>Sign In</button>
-        <button onClick={()=>setView('signup')} style={{flex:1,padding:'10px'}}>Sign Up</button>
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'linear-gradient(135deg,#f7f7fb,#ede9ff)'}}>
+      <div className="auth-box">
+        <h1>SAP Interview Hub</h1>
+        <div className="auth-toggle">
+          <button className={view==='signin'?'active':''} onClick={()=>setView('signin')}>Sign In</button>
+          <button className={view==='signup'?'active':''} onClick={()=>setView('signup')}>Sign Up</button>
+        </div>
+
+        {view==='signin'&&(
+          <form onSubmit={(e)=>{
+            e.preventDefault();
+            const formData=new FormData(e.target);
+            const vals=[...formData.values()];
+            handleSignIn(vals[0],vals[1]);
+          }} className="auth-box form">
+            <input type="email" name="email" placeholder="Email" required/>
+            <input type="password" name="password" placeholder="Password" required/>
+            <button type="submit" className="btn-auth">Sign In</button>
+          </form>
+        )}
+
+        {view==='signup'&&(
+          <form onSubmit={(e)=>{
+            e.preventDefault();
+            const formData=new FormData(e.target);
+            const vals=[...formData.values()];
+            handleSignUp(vals[0],vals[1],vals[2],vals[3],vals[4],vals[5],vals[6]);
+          }} className="auth-box form">
+            <input type="text" name="fullName" placeholder="Full Name" required/>
+            <input type="text" name="gender" placeholder="Gender (M/F/Other)" required/>
+            <input type="date" name="dob" placeholder="Date of Birth" required/>
+            <input type="text" name="company" placeholder="Company" required/>
+            <input type="text" name="country" placeholder="Country" required/>
+            <input type="email" name="email" placeholder="Email" required/>
+            <input type="password" name="password" placeholder="Password" required/>
+            <button type="submit" className="btn-auth">Sign Up</button>
+          </form>
+        )}
+
+        <div className="auth-divider">or</div>
+        <button onClick={handleSignInGoogle} className="btn-google">
+          <span>Sign In with Google</span>
+        </button>
       </div>
-      <button onClick={handleSignInGoogle} style={{width:'100%',padding:'10px',marginBottom:'10px'}}>Sign In with Google</button>
-      
-      {view==='signin'&&(
-        <form onSubmit={(e)=>{e.preventDefault();const [email,pass]=new FormData(e.target).values();handleSignIn([...new FormData(e.target).values()][0],[...new FormData(e.target).values()][1]);}} style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-          <input type="email" placeholder="Email" required style={{padding:'8px'}}/>
-          <input type="password" placeholder="Password" required style={{padding:'8px'}}/>
-          <button type="submit" style={{padding:'10px'}}>Sign In</button>
-        </form>
-      )}
-      
-      {view==='signup'&&(
-        <form onSubmit={(e)=>{e.preventDefault();const fd=new FormData(e.target);const vals=[...fd.values()];handleSignUp(vals[0],vals[1]);}} style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-          <input type="email" placeholder="Email" required style={{padding:'8px'}}/>
-          <input type="password" placeholder="Password" required style={{padding:'8px'}}/>
-          <button type="submit" style={{padding:'10px'}}>Sign Up</button>
-        </form>
-      )}
     </div>
   );
 
+  // ADMIN CONSOLE
   if(isAdmin) return (
-    <div style={{maxWidth:'1000px',margin:'0 auto',padding:'20px'}}>
-      <h1>Admin Console</h1>
-      <button onClick={handleSignOut} style={{float:'right',padding:'8px 15px'}}>Sign Out</button>
-      
-      <div style={{marginBottom:'20px',display:'flex',gap:'10px'}}>
-        <button onClick={()=>setAdminView('users')} style={{padding:'8px 15px',background:adminView==='users'?'#007bff':'#ddd'}}>Users</button>
-        <button onClick={()=>setAdminView('results')} style={{padding:'8px 15px',background:adminView==='results'?'#007bff':'#ddd'}}>Results</button>
-        <button onClick={()=>setAdminView('feedback')} style={{padding:'8px 15px',background:adminView==='feedback'?'#007bff':'#ddd'}}>Feedback</button>
+    <div className="app">
+      <div className="navbar">
+        <div className="logo">SAP Interview Hub - Admin</div>
+        <button onClick={()=>{setIsAdmin(false);handleSignOut();}} className="btn-logout">Sign Out</button>
       </div>
 
-      {adminView==='users'&&(
-        <div>
-          <h3>All Users ({allUsers.length})</h3>
-          <table style={{width:'100%',borderCollapse:'collapse'}}>
-            <thead><tr><th style={{border:'1px solid #ddd',padding:'8px'}}>Email</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Active Module</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Notifications</th></tr></thead>
+      <div className="main-card">
+        <h2>Admin Console</h2>
+        <div style={{display:'flex',gap:'10px',marginBottom:'20px'}}>
+          <button onClick={()=>setAdminView('users')} className={`lvl-btn ${adminView==='users'?'active':''}`}>Users ({allUsers.length})</button>
+          <button onClick={()=>setAdminView('results')} className={`lvl-btn ${adminView==='results'?'active':''}`}>Results ({allResults.length})</button>
+          <button onClick={()=>setAdminView('feedback')} className={`lvl-btn ${adminView==='feedback'?'active':''}`}>Feedback ({allFeedback.length})</button>
+        </div>
+
+        {adminView==='users'&&(
+          <table className="cs-table">
+            <thead><tr><th>Email</th><th>Name</th><th>Gender</th><th>Company</th><th>Country</th><th>Active Module</th><th>Notifications</th></tr></thead>
             <tbody>
-              {allUsers.map((u,i)=><tr key={i}><td style={{border:'1px solid #ddd',padding:'8px'}}>{u.email}</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{u.activeModule||'sd'}</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{u.questionNotifEnabled?'On':'Off'}</td></tr>)}
+              {allUsers.map((u,i)=><tr key={i}>
+                <td>{u.email}</td>
+                <td>{u.full_name||'-'}</td>
+                <td>{u.gender||'-'}</td>
+                <td>{u.company||'-'}</td>
+                <td>{u.country||'-'}</td>
+                <td>{(u.activeModule||'sd').toUpperCase()}</td>
+                <td>{u.question_notif_enabled?'On':'Off'}</td>
+              </tr>)}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
 
-      {adminView==='results'&&(
-        <div>
-          <h3>Quiz Results ({allResults.length})</h3>
-          <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
-            <thead><tr><th style={{border:'1px solid #ddd',padding:'8px'}}>User</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Module</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Section</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Score</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Date</th></tr></thead>
+        {adminView==='results'&&(
+          <table className="cs-table">
+            <thead><tr><th>User Email</th><th>Module</th><th>Section</th><th>Score</th><th>Date</th></tr></thead>
             <tbody>
-              {allResults.map((r,i)=><tr key={i}><td style={{border:'1px solid #ddd',padding:'8px'}}>{r.user_id?.slice(0,8)}</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{r.module}</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{r.section}</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{r.score}%</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{new Date(r.timestamp).toLocaleDateString()}</td></tr>)}
+              {allResults.map((r,i)=><tr key={i}>
+                <td>{r.user_email}</td>
+                <td>{r.module}</td>
+                <td>{r.section}</td>
+                <td>{r.score}%</td>
+                <td>{new Date(r.timestamp).toLocaleDateString()}</td>
+              </tr>)}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
 
-      {adminView==='feedback'&&(
-        <div>
-          <h3>Feedback ({allFeedback.length})</h3>
-          {allFeedback.map((f,i)=><div key={i} style={{padding:'10px',border:'1px solid #ddd',marginBottom:'10px',borderRadius:'4px'}}>
-            <strong>{f.user_id?.slice(0,8)} - {f.module}/{f.section}</strong>
-            <p style={{margin:'5px 0 0 0',fontSize:'14px'}}>{f.feedback}</p>
-          </div>)}
-        </div>
-      )}
+        {adminView==='feedback'&&(
+          <div>
+            {allFeedback.map((fb,i)=>(
+              <div key={i} className="cs-tip" style={{marginBottom:'15px'}}>
+                <h4>{fb.user_email} - {fb.module} / {fb.section}</h4>
+                <p>{fb.feedback_text}</p>
+                <small style={{color:'#999'}}>{new Date(fb.timestamp).toLocaleString()}</small>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 
+  // MAIN APP
   return (
-    <div style={{maxWidth:'1200px',margin:'0 auto',padding:'20px',fontFamily:'Arial,sans-serif'}}>
-      <h1>SAP Interview Hub</h1>
-      
-      <div style={{display:'flex',gap:'10px',marginBottom:'20px',alignItems:'center'}}>
-        <select value={activeModule} onChange={(e)=>{setActiveModule(e.target.value);setSelectedTab(null);setQuizMode(false);}} style={{padding:'8px 15px',fontSize:'16px'}}>
-          <option value="sd">SAP SD</option>
-          <option value="fico">SAP FICO</option>
-          <option value="rar">SAP RAR</option>
-        </select>
-        
-        <button onClick={()=>setView('home')} style={{padding:'8px 15px',background:view==='home'?'#007bff':'#ddd',color:view==='home'?'white':'black',cursor:'pointer'}}>Home</button>
-        <button onClick={()=>{setView('profile');setEditingProfile(false);}} style={{padding:'8px 15px',background:view==='profile'?'#007bff':'#ddd',color:view==='profile'?'white':'black',cursor:'pointer'}}>Profile</button>
-        
-        <input type="password" placeholder="Admin PIN" value={adminPin} onChange={(e)=>setAdminPin(e.target.value)} style={{padding:'8px 15px',marginLeft:'auto',width:'120px'}}/>
-        <button onClick={handleSignOut} style={{padding:'8px 15px'}}>Sign Out</button>
+    <div className="app">
+      <div className="navbar">
+        <div className="logo">SAP Interview Hub</div>
+        <div className="nav-right">
+          <select onChange={(e)=>setActiveModule(e.target.value)} value={activeModule} style={{padding:'8px 12px',borderRadius:'8px',border:'1px solid #e4e4ec',background:'#fff'}}>
+            <option value="sd">SAP SD (14d)</option>
+            <option value="fico">SAP FICO (18d)</option>
+            <option value="rar">SAP RAR (7d)</option>
+          </select>
+          <button onClick={()=>setView('home')} className={`lvl-btn ${view==='home'?'active':''}`} style={{marginLeft:'10px'}}>Home</button>
+          <button onClick={()=>setView('profile')} className={`lvl-btn ${view==='profile'?'active':''}`}>Profile</button>
+          <button onClick={()=>{setAdminPin('');setIsAdmin(false);handleSignOut();}} className="btn-logout">Sign Out</button>
+        </div>
       </div>
 
-      {view==='home'&&(
-        <>
-          <div style={{marginBottom:'20px'}}>
-            <h3>{mod.label} - Select a Tab</h3>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'10px'}}>
-              {mod.sections.map(tab=>(
-                <button key={tab.id} onClick={()=>{setSelectedTab(tab.id);setQuizMode(false);setSubmitted(false);}} style={{padding:'15px',border:selectedTab===tab.id?'2px solid #007bff':'1px solid #ddd',background:selectedTab===tab.id?'#e7f3ff':'white',cursor:'pointer',borderRadius:'4px',fontSize:'14px',fontWeight:selectedTab===tab.id?'bold':'normal'}}>
-                  {tab.title}<br/><small>{tab.subtitle}</small>
-                </button>
-              ))}
-            </div>
+      {!isAdmin&&view==='home'&&(
+        <div className="main-card">
+          <div className="hero">
+            <h2>{mod.label} - Select a Tab</h2>
+            <p className="subtitle">Daily rotation: {mod.rotationDays} days</p>
           </div>
 
-          {selectedTabObj&&(
-            <div style={{background:'#f9f9f9',padding:'20px',borderRadius:'8px',marginTop:'20px'}}>
-              <h2>{selectedTabObj.title}</h2>
-              <p><em>{selectedTabObj.subtitle}</em></p>
+          <div className="section-grid">
+            {mod.rotationTabs.map(tabId=>{
+              const tab=mod.sections.find(s=>s.id===tabId);
+              return (
+                <div key={tabId} className={`section-card ${tab.special?'section-card--special':''}`} onClick={()=>{setSelectedTab(tabId);setQuizMode(false);setSubmitted(false);setAnswers({});}}>
+                  <div className="section-card__tag">{tab.day?'Day '+tab.day:'Reference'}</div>
+                  <h3>{tab.title}</h3>
+                  <p>{tab.subtitle}</p>
+                </div>
+              );
+            })}
+          </div>
 
-              {!quizMode&&!submitted&&(
-                <div>
-                  <h3>Concepts</h3>
-                  {selectedTabObj.concepts?.map((c,i)=><div key={i} style={{marginBottom:'15px',paddingBottom:'15px',borderBottom:'1px solid #ddd'}}>
-                    <h4 style={{margin:'5px 0'}}>{c.name}</h4>
-                    <p style={{margin:'5px 0',fontSize:'14px',color:'#555'}}>{c.text}</p>
-                  </div>)}
-
-                  <div style={{marginTop:'20px',display:'flex',gap:'10px'}}>
-                    <button onClick={()=>setQuizMode(true)} style={{padding:'10px 20px',background:'#28a745',color:'white',cursor:'pointer',borderRadius:'4px'}}>Start Q&A Quiz</button>
-                    {mod.cheatsheets?.[selectedTabObj.id]&&<button onClick={()=>alert(mod.cheatsheets[selectedTabObj.id].content)} style={{padding:'10px 20px',background:'#ffc107',cursor:'pointer',borderRadius:'4px'}}>View Cheatsheet</button>}
+          {selectedTabObj&&!quizMode&&!submitted&&(
+            <div style={{marginTop:'30px'}}>
+              <h3 style={{marginBottom:'15px',color:'#5b4dc7'}}>Concepts</h3>
+              <div className="concepts-grid">
+                {selectedTabObj.concepts?.map((c,i)=>(
+                  <div key={i} className="concept-box">
+                    <h4>{c.title}</h4>
+                    <p>{c.desc}</p>
                   </div>
-                </div>
-              )}
+                ))}
+              </div>
 
-              {quizMode&&!submitted&&(
-                <div>
-                  <h3>Q&A Quiz</h3>
-                  {(selectedTabObj.junior||[]).map((q,i)=><div key={i} style={{marginBottom:'20px',paddingBottom:'20px',borderBottom:'1px solid #ddd'}}>
-                    <p style={{fontWeight:'bold',marginBottom:'10px'}}>Q{i+1}: {q.q}</p>
-                    {q.opts?.map((opt,j)=><label key={j} style={{display:'block',marginBottom:'8px',cursor:'pointer'}}>
-                      <input type="radio" name={`q${i}`} onChange={()=>handleAnswer(i,j)} checked={answers[i]===j} style={{marginRight:'8px'}}/>
-                      {opt}
-                    </label>)}
-                  </div>)}
-                  <button onClick={handleSubmitQuiz} style={{padding:'10px 20px',background:'#007bff',color:'white',cursor:'pointer',borderRadius:'4px'}}>Submit Quiz</button>
-                </div>
-              )}
+              <div style={{marginTop:'20px',display:'flex',gap:'10px'}}>
+                <button onClick={()=>setQuizMode(true)} className="btn-submit" style={{width:'auto',marginTop:'0'}}>Start Q&A Quiz</button>
+                {mod.cheatsheets?.[selectedTabObj.id]&&(
+                  <button onClick={()=>setShowCheatsheet(!showCheatsheet)} className="btn-submit" style={{width:'auto',marginTop:'0',background:'#d97706'}}>
+                    {showCheatsheet?'Hide':'Show'} Cheatsheet
+                  </button>
+                )}
+              </div>
 
-              {submitted&&results&&(
-                <div style={{background:'#e8f5e9',padding:'20px',borderRadius:'4px',marginTop:'20px'}}>
-                  <h3>Results</h3>
-                  <p style={{fontSize:'18px',fontWeight:'bold'}}>Score: {results.score}% ({results.correct}/{results.total})</p>
-                  <textarea placeholder="Share your feedback..." value={feedback} onChange={(e)=>setFeedback(e.target.value)} style={{width:'100%',height:'100px',padding:'10px',marginTop:'10px',marginBottom:'10px',borderRadius:'4px',border:'1px solid #ddd'}}/>
-                  <button onClick={handleFeedback} style={{padding:'8px 15px',background:'#007bff',color:'white',cursor:'pointer',borderRadius:'4px'}}>Submit Feedback</button>
-                  <button onClick={()=>{setQuizMode(false);setSubmitted(false);setAnswers({});}} style={{padding:'8px 15px',marginLeft:'10px',cursor:'pointer',borderRadius:'4px'}}>Retake Quiz</button>
+              {showCheatsheet&&mod.cheatsheets?.[selectedTabObj.id]&&(
+                <div style={{marginTop:'20px',padding:'20px',background:'#fef3c7',borderRadius:'8px',borderLeft:'3px solid #d97706'}}>
+                  {renderCheatsheet(mod.cheatsheets[selectedTabObj.id].content)}
                 </div>
               )}
             </div>
           )}
-        </>
+
+          {quizMode&&selectedTabObj&&(
+            <div style={{marginTop:'30px'}}>
+              <h3 style={{marginBottom:'20px',color:'#5b4dc7'}}>Quiz: {selectedTabObj.title}</h3>
+              {mod.questionBank.filter(q=>q.section===selectedTab).map((q,i)=>(
+                <div key={i} className="quiz-q">
+                  <div className="q-num">Question {i+1}</div>
+                  <div className="q-text">{q.question}</div>
+                  <div className="options">
+                    {q.opts?.map((opt,j)=>(
+                      <label key={j} className={`option ${answers[i]===j?'selected':''}`} style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                        <input type="radio" name={`q${i}`} onChange={()=>handleAnswer(i,j)} checked={answers[i]===j} style={{margin:0}}/>
+                        {opt}
+                      </label>
+                    ))}
+                  </div>
+                  {submitted&&(
+                    <div className="explanation">
+                      <strong>{answers[i]===q.correct?'✓ Correct':'✗ Incorrect'}</strong>
+                      <p>{q.explanation}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {!submitted&&<button onClick={handleSubmitQuiz} className="btn-submit">Submit Quiz</button>}
+            </div>
+          )}
+
+          {submitted&&results&&(
+            <div style={{marginTop:'30px',background:'#e8f5e9',padding:'20px',borderRadius:'8px'}}>
+              <h3>Results</h3>
+              <p style={{fontSize:'18px',fontWeight:'bold',marginBottom:'15px'}}>Score: {results.score}% ({results.correct}/{results.total})</p>
+              <textarea placeholder="Share your feedback..." value={feedback} onChange={(e)=>setFeedback(e.target.value)} style={{width:'100%',height:'100px',padding:'10px',marginBottom:'10px',borderRadius:'8px',border:'1px solid #ddd',fontFamily:'inherit'}}/>
+              <div style={{display:'flex',gap:'10px'}}>
+                <button onClick={handleFeedback} className="btn-submit" style={{width:'auto'}}>Submit Feedback</button>
+                <button onClick={()=>{setQuizMode(false);setSubmitted(false);setAnswers({});}} className="btn-submit" style={{width:'auto',background:'#999'}}>Retake Quiz</button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {view==='profile'&&(
-        <div style={{background:'#f9f9f9',padding:'20px',borderRadius:'8px',maxWidth:'500px'}}>
-          <h2>Profile</h2>
-          {editingProfile?(
-            <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-              <label>
-                Active Module:
-                <select onChange={(e)=>handleProfileUpdate({activeModule:e.target.value})} style={{marginLeft:'10px',padding:'5px'}}>
-                  <option value="sd">SD</option>
-                  <option value="fico">FICO</option>
-                  <option value="rar">RAR</option>
-                </select>
-              </label>
-              <label>
-                <input type="checkbox" checked={user?.questionNotifEnabled||false} onChange={(e)=>handleProfileUpdate({questionNotifEnabled:e.target.checked})}/> Enable Daily Notifications
-              </label>
-              <label>
-                Question Difficulty:
-                <select onChange={(e)=>handleProfileUpdate({questionNotifDifficulty:e.target.value})} style={{marginLeft:'10px',padding:'5px'}}>
-                  <option value="easy">Easy (Junior)</option>
-                  <option value="hard">Hard (Senior)</option>
-                </select>
-              </label>
-              <button onClick={()=>setEditingProfile(false)} style={{padding:'8px 15px',background:'#28a745',color:'white',cursor:'pointer',borderRadius:'4px'}}>Done</button>
+        <div className="main-card">
+          <div className="profile-card">
+            <div className="profile-header">
+              <div className="profile-avatar">{user?.email?.[0].toUpperCase()||'U'}</div>
+              <div>
+                <h2 style={{margin:'0 0 3px 0'}}>{user?.fullName||'User'}</h2>
+                <p style={{color:'#6b6b80',margin:0}}>{user?.email}</p>
+              </div>
             </div>
-          ):(
-            <div>
-              <p><strong>Email:</strong> {user?.email}</p>
-              <p><strong>Active Module:</strong> {(user?.activeModule||'sd').toUpperCase()}</p>
-              <p><strong>Daily Notifications:</strong> {user?.questionNotifEnabled?'On':'Off'}</p>
-              <p><strong>Difficulty:</strong> {user?.questionNotifDifficulty==='hard'?'Senior (Hard)':'Junior (Easy)'}</p>
-              <button onClick={()=>setEditingProfile(true)} style={{padding:'8px 15px',background:'#007bff',color:'white',cursor:'pointer',borderRadius:'4px'}}>Edit</button>
-            </div>
-          )}
 
-          <h3 style={{marginTop:'20px'}}>My Results</h3>
-          {userResults.length>0?(
-            <table style={{width:'100%',borderCollapse:'collapse'}}>
-              <thead><tr><th style={{border:'1px solid #ddd',padding:'8px'}}>Module</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Section</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Score</th><th style={{border:'1px solid #ddd',padding:'8px'}}>Date</th></tr></thead>
-              <tbody>
-                {userResults.map((r,i)=><tr key={i}><td style={{border:'1px solid #ddd',padding:'8px'}}>{r.module}</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{r.section}</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{r.score}%</td><td style={{border:'1px solid #ddd',padding:'8px'}}>{new Date(r.timestamp).toLocaleDateString()}</td></tr>)}
-              </tbody>
-            </table>
-          ):<p>No results yet. Start a quiz!</p>}
+            {!editingProfile&&(
+              <div>
+                <div className="profile-section">
+                  <h3>Personal Information</h3>
+                  <div className="profile-grid">
+                    <div className="profile-field">
+                      <div className="profile-label">Full Name</div>
+                      <div className="profile-value">{user?.fullName||'-'}</div>
+                    </div>
+                    <div className="profile-field">
+                      <div className="profile-label">Gender</div>
+                      <div className="profile-value">{user?.gender||'-'}</div>
+                    </div>
+                    <div className="profile-field">
+                      <div className="profile-label">Date of Birth</div>
+                      <div className="profile-value">{user?.dob||'-'}</div>
+                    </div>
+                    <div className="profile-field">
+                      <div className="profile-label">Company</div>
+                      <div className="profile-value">{user?.company||'-'}</div>
+                    </div>
+                    <div className="profile-field">
+                      <div className="profile-label">Country</div>
+                      <div className="profile-value">{user?.country||'-'}</div>
+                    </div>
+                    <div className="profile-field">
+                      <div className="profile-label">Email</div>
+                      <div className="profile-value">{user?.email||'-'}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="profile-section">
+                  <h3>Learning Preferences</h3>
+                  <div className="profile-grid">
+                    <div className="profile-field">
+                      <div className="profile-label">Active Module</div>
+                      <div className="profile-value">{(user?.activeModule||'sd').toUpperCase()}</div>
+                    </div>
+                    <div className="profile-field">
+                      <div className="profile-label">Daily Notifications</div>
+                      <div className="profile-value">{user?.questionNotifEnabled?'On':'Off'}</div>
+                    </div>
+                    <div className="profile-field">
+                      <div className="profile-label">Difficulty Level</div>
+                      <div className="profile-value">{user?.questionNotifDifficulty==='hard'?'Senior (Hard)':'Junior (Easy)'}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <button onClick={()=>{setEditingProfile(true);setProfileForm({fullName:user?.fullName||'',gender:user?.gender||'',dob:user?.dob||'',company:user?.company||'',country:user?.country||''});}} className="btn-edit" style={{marginTop:'20px'}}>Edit Profile</button>
+              </div>
+            )}
+
+            {editingProfile&&(
+              <div className="profile-edit">
+                <label>
+                  Full Name
+                  <input type="text" value={profileForm.fullName} onChange={(e)=>setProfileForm({...profileForm,fullName:e.target.value})}/>
+                </label>
+                <label>
+                  Gender
+                  <input type="text" value={profileForm.gender} onChange={(e)=>setProfileForm({...profileForm,gender:e.target.value})} placeholder="M/F/Other"/>
+                </label>
+                <label>
+                  Date of Birth
+                  <input type="date" value={profileForm.dob} onChange={(e)=>setProfileForm({...profileForm,dob:e.target.value})}/>
+                </label>
+                <label>
+                  Company
+                  <input type="text" value={profileForm.company} onChange={(e)=>setProfileForm({...profileForm,company:e.target.value})}/>
+                </label>
+                <label>
+                  Country
+                  <input type="text" value={profileForm.country} onChange={(e)=>setProfileForm({...profileForm,country:e.target.value})}/>
+                </label>
+                <label>
+                  Active Module
+                  <select onChange={(e)=>handleProfileUpdate({activeModule:e.target.value})} defaultValue={user?.activeModule||'sd'}>
+                    <option value="sd">SAP SD</option>
+                    <option value="fico">SAP FICO</option>
+                    <option value="rar">SAP RAR</option>
+                  </select>
+                </label>
+                <label style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                  <input type="checkbox" checked={user?.questionNotifEnabled||false} onChange={(e)=>handleProfileUpdate({questionNotifEnabled:e.target.checked})}/>
+                  <span>Enable Daily Notifications</span>
+                </label>
+                <label>
+                  Question Difficulty
+                  <select onChange={(e)=>handleProfileUpdate({questionNotifDifficulty:e.target.value})} defaultValue={user?.questionNotifDifficulty||'easy'}>
+                    <option value="easy">Easy (Junior)</option>
+                    <option value="hard">Hard (Senior)</option>
+                  </select>
+                </label>
+                <div className="btn-row">
+                  <button onClick={()=>{handleProfileUpdate(profileForm);}} className="btn-edit" style={{background:'#40c463',color:'#fff',border:'none'}}>Save Changes</button>
+                  <button onClick={()=>setEditingProfile(false)} className="btn-cancel">Cancel</button>
+                </div>
+              </div>
+            )}
+
+            <div className="profile-section" style={{marginTop:'30px'}}>
+              <h3>My Quiz Results</h3>
+              {userResults.length>0?(
+                <table className="cs-table">
+                  <thead><tr><th>Module</th><th>Section</th><th>Score</th><th>Date</th></tr></thead>
+                  <tbody>
+                    {userResults.map((r,i)=><tr key={i}><td>{r.module}</td><td>{r.section}</td><td>{r.score}%</td><td>{new Date(r.timestamp).toLocaleDateString()}</td></tr>)}
+                  </tbody>
+                </table>
+              ):<p>No quiz results yet.</p>}
+            </div>
+
+            <div style={{marginTop:'30px',paddingTop:'20px',borderTop:'1px solid #e4e4ec'}}>
+              <div style={{display:'flex',gap:'10px'}}>
+                <input type="password" placeholder="Admin PIN" value={adminPin} onChange={(e)=>setAdminPin(e.target.value)} style={{padding:'8px 12px',borderRadius:'8px',border:'1px solid #e4e4ec',flex:1}}/>
+                <button onClick={handleAdminPin} className="btn-edit">Access Admin</button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
-
-export default App;
-
