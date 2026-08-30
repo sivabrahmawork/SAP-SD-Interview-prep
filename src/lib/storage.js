@@ -10,17 +10,8 @@ const supabase = !useLocal ? createClient(
 // ============================================================================
 // NORMALIZEPROFILE — Standardizes Supabase rows to app user object shape
 // ============================================================================
-// Handles:
-// - Session user data from supabase.auth.getSession()
-// - Profile row data from profiles table
-// - Cases where profile is null (new users)
-// - ALL profile fields: full_name, gender, dob, company, country, email, etc.
-// ============================================================================
 
 function normalizeProfile(authUser, profileRow) {
-    // authUser = from supabase.auth.getSession().session.user
-    // profileRow = from supabase.from('profiles').select('*').single()
-    
     return {
         id: authUser?.id || null,
         email: authUser?.email || null,
@@ -38,7 +29,7 @@ function normalizeProfile(authUser, profileRow) {
 }
 
 // ============================================================================
-// SIGN UP — Creates auth account + profile row with ALL user data
+// SIGN UP
 // ============================================================================
 
 export async function signUp(email, password, profileData = {}) {
@@ -60,14 +51,12 @@ export async function signUp(email, password, profileData = {}) {
         return;
     }
 
-    // Step 1: Create auth account
     const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
     });
     if (authError) throw authError;
 
-    // Step 2: Create profiles table row with ALL user info
     const userId = authData.user?.id;
     if (userId) {
         const { error: profileError } = await supabase.from('profiles').insert([{
@@ -127,7 +116,7 @@ export async function signInWithGoogle() {
 }
 
 // ============================================================================
-// GET CURRENT USER — Retrieves current session + profile data
+// GET CURRENT USER
 // ============================================================================
 
 export async function getCurrentUser() {
@@ -135,18 +124,23 @@ export async function getCurrentUser() {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user) return null;
 
-    const { data: profileRow } = await supabase
+    const { data: profileRow, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', session.user.id)
-        .single()
-        .catch(() => ({ data: null }));
+        .single();
+
+    // If profile doesn't exist, return user without profile data
+    if (error && error.code === 'PGRST116') {
+        return normalizeProfile(session.user, null);
+    }
+    if (error) throw error;
 
     return normalizeProfile(session.user, profileRow);
 }
 
 // ============================================================================
-// SUBSCRIBE TO AUTH CHANGES — Listens for sign-in, sign-out, token refresh
+// SUBSCRIBE TO AUTH CHANGES
 // ============================================================================
 
 export function subscribeAuthChanges(callback) {
@@ -158,12 +152,22 @@ export function subscribeAuthChanges(callback) {
             return;
         }
 
-        const { data: profileRow } = await supabase
+        const { data: profileRow, error } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', session.user.id)
-            .single()
-            .catch(() => ({ data: null }));
+            .single();
+
+        // If profile doesn't exist yet, use null (normalizeProfile handles it)
+        if (error && error.code === 'PGRST116') {
+            callback(normalizeProfile(session.user, null));
+            return;
+        }
+        if (error) {
+            console.error('Profile fetch error:', error);
+            callback(normalizeProfile(session.user, null));
+            return;
+        }
 
         callback(normalizeProfile(session.user, profileRow));
     });
@@ -172,7 +176,7 @@ export function subscribeAuthChanges(callback) {
 }
 
 // ============================================================================
-// UPDATE PROFILE — Updates user profile data
+// UPDATE PROFILE
 // ============================================================================
 
 export async function updateProfile(userId, updates) {
@@ -180,7 +184,6 @@ export async function updateProfile(userId, updates) {
         return;
     }
 
-    // Map app field names to database column names
     const dbUpdates = {
         full_name: updates.fullName,
         gender: updates.gender,
@@ -194,7 +197,6 @@ export async function updateProfile(userId, updates) {
         question_notif_difficulty: updates.questionNotifDifficulty,
     };
 
-    // Remove undefined values
     Object.keys(dbUpdates).forEach(key => dbUpdates[key] === undefined && delete dbUpdates[key]);
 
     const { error } = await supabase
@@ -267,7 +269,6 @@ export async function saveFeedback(userId, module, section, feedbackText) {
 
 export async function checkIsAdmin(userId) {
     if (useLocal) return false;
-    // PIN-based auth is sufficient for this implementation
     return true;
 }
 
@@ -286,7 +287,6 @@ export async function adminGetAllResults() {
         .from('quiz_results')
         .select('*');
     if (error) throw error;
-    // Fetch user emails separately
     const usersData = await supabase.from('profiles').select('id,email');
     const userMap = {};
     usersData.data?.forEach(u => { userMap[u.id] = u.email; });
@@ -299,7 +299,6 @@ export async function adminGetAllFeedback() {
         .from('feedback')
         .select('*');
     if (error) throw error;
-    // Fetch user emails separately
     const usersData = await supabase.from('profiles').select('id,email');
     const userMap = {};
     usersData.data?.forEach(u => { userMap[u.id] = u.email; });
