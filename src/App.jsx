@@ -197,6 +197,10 @@ export default function App(){
   const[todayQExpanded,setTodayQExpanded]=useState(false);
   const[qbLevel,setQbLevel]=useState('junior');
   const[expandedQ,setExpandedQ]=useState({});
+  // Real back-navigation. Each entry is a snapshot of the three fields that
+  // define which screen is showing. Pushed before every forward move, popped
+  // by the Back button. There is no router here, so this is the history.
+  const[navStack,setNavStack]=useState([]);
 
   useEffect(()=>{
     let active=true;
@@ -225,13 +229,30 @@ export default function App(){
   },[user,activeModule]);
   useEffect(()=>{if(section)loadResults(section);},[section,loadResults]);
 
+  const pushNav=()=>setNavStack(st=>[...st,{activeModule,section,showModulePicker}]);
+
+  // Pop one screen. Falls back to the welcome screen when the stack is empty
+  // (e.g. a module restored from the user's saved profile on first load).
+  const goBack=()=>{
+    setSubmitted(false);setAnswers({});setExpandedQ({});setTodayQExpanded(false);
+    const prev=navStack.length>0
+      ? navStack[navStack.length-1]
+      : {activeModule:null,section:null,showModulePicker:false};
+    setActiveModule(prev.activeModule);
+    setSection(prev.section);
+    setShowModulePicker(prev.showModulePicker);
+    if(navStack.length>0) setNavStack(st=>st.slice(0,-1));
+  };
+
   const resetToWelcome=()=>{
+    setNavStack([]);
     setActiveModule(null);setSection(null);setShowProfile(false);
     setShowAdmin(false);setShowModulePicker(false);
     setSubmitted(false);setAnswers({});setExpandedQ({});
   };
 
   const chooseModule=async(key)=>{
+    pushNav();
     setActiveModule(key);
     setShowModulePicker(false);
     setSection(null);setSubmitted(false);setAnswers({});setExpandedQ({});
@@ -253,7 +274,7 @@ export default function App(){
     <nav className="navbar">
       <h1 className="logo" onClick={resetToWelcome} style={{cursor:'pointer'}}>SAP Interview Hub</h1>
       <div className="nav-right">
-        <button className="btn-module" onClick={()=>setShowModulePicker(p=>!p)}>
+        <button className="btn-module" onClick={()=>{if(showModulePicker){goBack();}else{pushNav();setShowModulePicker(true);}}}>
           SAP Module{activeModule?': '+MODULES[activeModule].label:''}
         </button>
         <button className="btn-profile" onClick={()=>setShowProfile(true)} title="Profile">{user.fullName?.charAt(0)||'U'}</button>
@@ -279,7 +300,7 @@ export default function App(){
         })}
       </div>
       {activeModule&&<div style={{textAlign:'center',marginTop:20}}>
-        <button className="btn-cancel" onClick={()=>setShowModulePicker(false)}>Cancel</button>
+        <button className="btn-cancel" onClick={goBack}>Cancel</button>
       </div>}
     </div>
   );
@@ -298,7 +319,7 @@ export default function App(){
               </p>
             </div>
             <div style={{textAlign:'center',marginTop:28}}>
-              <button className="btn-submit" onClick={()=>setShowModulePicker(true)}>Choose a Module</button>
+              <button className="btn-submit" onClick={()=>{pushNav();setShowModulePicker(true);}}>Choose a Module</button>
             </div>
             <div style={{textAlign:'center',marginTop:28}}>
               <button className="btn-admin-link" onClick={()=>setShowAdmin(true)}>Admin Console</button>
@@ -348,6 +369,7 @@ export default function App(){
   })();
 
   const openSection=(t)=>{
+    pushNav();
     setSection(t.id);
     const firstLevel=hasItems(t.junior)?'junior':hasItems(t.senior)?'senior':'junior';
     setLevel(firstLevel);
@@ -406,7 +428,7 @@ export default function App(){
 
       {!section?(
         <div className="main-card">
-          <button className="btn-home" onClick={resetToWelcome}>← Back to Home</button>
+          <button className="btn-home" onClick={goBack}>← Back to previous page</button>
           <div className="hero">
             <h2>{mod.label}</h2>
             <p className="subtitle">{mod.blurb} · {mod.rotationDays}-day rotation · {allTabs.length} tabs</p>
@@ -455,10 +477,7 @@ export default function App(){
         </div>
       ):(
         <div className="main-card">
-          <div className="crumb-row">
-            <button className="btn-home" onClick={resetToWelcome}>← Back to Home</button>
-            <button className="btn-back" onClick={()=>{setSection(null);setSubmitted(false);setAnswers({});setExpandedQ({});}}>← Back to {mod.label} Topics</button>
-          </div>
+          <button className="btn-home" onClick={goBack}>← Back to previous page</button>
           <h2>{current?.title}{current?.subtitle ? ': '+current.subtitle : ''}</h2>
 
           <div className="tab-bar">
