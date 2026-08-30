@@ -3,8 +3,11 @@ import {SECTIONS,TCODES,SE16N,ADVANCED,FINAL_TEST,CHEATSHEETS} from './data/sect
 import QUESTION_BANK from './data/questionBankIndex';
 import {FICO_SECTIONS,FICO_CHEATSHEETS} from './data/sectionsFico';
 import QUESTION_BANK_FICO from './data/questionBankFico';
-import {RAR_SECTIONS,RAR_CHEATSHEETS} from './data/sectionsRar';
+import {RAR_SECTIONS} from './data/sectionsRar';
+import RAR_CHEATSHEETS from './data/cheatsheetsRar';
 import QUESTION_BANK_RAR from './data/questionBankRar';
+import {FICO_TCODES,FICO_SE16N,FICO_ADVANCED,FICO_FINAL_TEST} from './data/referenceFico';
+import {RAR_ADVANCED,RAR_FINAL_TEST} from './data/referenceRar';
 import {signUp,signIn,signOut,saveResult,getResults,saveFeedback,updateProfile,changePassword,adminGetAllUsers,adminGetAllResults,adminGetAllFeedback,isLocalMode,checkIsAdmin,signInWithGoogle,getCurrentUser,subscribeAuthChanges} from './lib/storage';
 
 const ADMIN_PIN='SD2025hub';
@@ -33,7 +36,17 @@ const MODULES={
     sections:FICO_SECTIONS,
     questionBank:QUESTION_BANK_FICO,
     cheatsheets:FICO_CHEATSHEETS,
-    tcodes:null,se16n:null,advanced:null,finalTest:null,
+    // Tab groups: renders labelled bands on the module landing screen so the
+    // 28 FICO tabs read as FI -> CO -> cross-module instead of one long wall.
+    groups:[
+      {label:'Financial Accounting (FI)',hint:'Core FI rotation + advanced FI topics',match:id=>id.startsWith('fi-')},
+      {label:'Controlling (CO)',hint:'Cost centres, orders, product costing, margin analysis',match:id=>id.startsWith('co-')},
+      {label:'Cross-Module & Common',hint:'FI-CO integration, MM/SD/PP/PS links, reference tabs',match:()=>true},
+    ],
+    tcodes:FICO_TCODES,
+    se16n:FICO_SE16N,
+    advanced:FICO_ADVANCED,
+    finalTest:FICO_FINAL_TEST,
   },
   rar:{
     key:'rar',label:'SAP RAR',rotationDays:7,
@@ -41,7 +54,11 @@ const MODULES={
     sections:RAR_SECTIONS,
     questionBank:QUESTION_BANK_RAR,
     cheatsheets:RAR_CHEATSHEETS,
-    tcodes:null,se16n:null,advanced:null,finalTest:null,
+    // RAR keeps its T-codes/tables inside the rar_tab10 cheatsheet, so no
+    // separate reference tab here — it would duplicate that content.
+    tcodes:null,se16n:null,
+    advanced:RAR_ADVANCED,
+    finalTest:RAR_FINAL_TEST,
   },
 };
 const MODULE_KEYS=Object.keys(MODULES);
@@ -65,20 +82,59 @@ function normalizeCheatsheet(raw){
 
 // SD/FICO question banks store {q,a,type} for reading.
 // RAR stores {q,opts,ans,type} (MCQ). Surface an answer string either way.
+// Question-type vocabulary drifted across the three data sets:
+// SD/FICO wrote 'conceptual', RAR wrote 'concept'. Map everything onto one
+// canonical set so the badge always renders with a matching CSS class.
+const QTYPE_ALIASES={concept:'conceptual',conceptual:'conceptual',definition:'conceptual',
+  scenario:'scenario',situational:'scenario',
+  troubleshooting:'troubleshooting',troubleshoot:'troubleshooting',
+  edge:'edge-case','edge-case':'edge-case',edgecase:'edge-case'};
+const QTYPE_LABELS={conceptual:'Conceptual',scenario:'Scenario',
+  troubleshooting:'Troubleshooting','edge-case':'Edge Case'};
+function normalizeType(t){
+  const key=String(t||'').trim().toLowerCase();
+  return QTYPE_ALIASES[key]||'conceptual';
+}
+function typeLabel(t){return QTYPE_LABELS[normalizeType(t)]||'Conceptual';}
+
 function normalizeQBItem(item){
   if(!item) return null;
   if(typeof item.a==='string'&&item.a.length>0){
-    return {q:item.q,a:item.a,type:item.type||'conceptual'};
+    return {q:item.q,a:item.a,type:normalizeType(item.type)};
   }
   if(Array.isArray(item.opts)&&typeof item.ans==='number'){
     const correct=item.opts[item.ans];
     const exp=typeof item.exp==='string'&&item.exp.length>0?' — '+item.exp:'';
-    return {q:item.q,a:(correct!==undefined?correct:'(answer unavailable)')+exp,type:item.type||'conceptual'};
+    return {q:item.q,a:(correct!==undefined?correct:'(answer unavailable)')+exp,type:normalizeType(item.type)};
   }
-  return {q:item.q||'(question unavailable)',a:'(answer unavailable)',type:item.type||'conceptual'};
+  return {q:item.q||'(question unavailable)',a:'(answer unavailable)',type:normalizeType(item.type)};
 }
 
 function hasItems(arr){return Array.isArray(arr)&&arr.length>0;}
+
+// Day-tab ids are already unique across modules (day1 / fi-day-1 / rar_day1),
+// but every module reuses 'advanced', 'finaltest' and 'finalfeedback'. Without
+// a module prefix those three would pool SD, FICO and RAR scores into one
+// bucket in Results and in the admin console.
+const SHARED_TAB_IDS=['advanced','finaltest','finalfeedback'];
+function resultKey(moduleKey,sectionId){
+  if(!sectionId) return sectionId;
+  return SHARED_TAB_IDS.includes(sectionId)?moduleKey+'_'+sectionId:sectionId;
+}
+
+// Split a module's tabs into labelled bands. Modules with no `groups` config
+// (SD, RAR) fall through to a single unlabelled band = the old behaviour.
+// Each tab lands in the FIRST group whose match() accepts it, so the last
+// group can be a catch-all. Empty groups are dropped.
+function groupTabs(tabs,groups){
+  if(!Array.isArray(groups)||groups.length===0) return [{label:null,hint:null,tabs}];
+  const out=groups.map(g=>({label:g.label,hint:g.hint,tabs:[]}));
+  tabs.forEach(t=>{
+    const i=groups.findIndex(g=>{try{return g.match(t.id,t);}catch(e){return false;}});
+    out[i>=0?i:out.length-1].tabs.push(t);
+  });
+  return out.filter(g=>g.tabs.length>0);
+}
 
 // Deterministic daily pick: same user + same day + same module = same question.
 function simpleHash(str){
@@ -154,10 +210,19 @@ export default function App(){
   },[]);
 
   const showToast=useCallback((msg)=>{setToast(msg);setTimeout(()=>setToast(''),3000);},[]);
-  const loadResults=useCallback(async(sid)=>{
+  const loadResults=useCallback(async(sid,moduleKey)=>{
     if(!user)return;
-    try{const r=await getResults(user.id,sid);setResults(r);}catch(e){setResults([]);}
-  },[user]);
+    const key=resultKey(moduleKey||activeModule,sid);
+    try{
+      let r=await getResults(user.id,key);
+      // Scores taken before this change were stored unprefixed. Merge those in
+      // for SD only, so existing SD history is not orphaned by the rename.
+      if(key!==sid&&(moduleKey||activeModule)==='sd'){
+        try{const legacy=await getResults(user.id,sid);r=[...r,...legacy];}catch(e){/* legacy read is best-effort */}
+      }
+      setResults(r);
+    }catch(e){setResults([]);}
+  },[user,activeModule]);
   useEffect(()=>{if(section)loadResults(section);},[section,loadResults]);
 
   const resetToWelcome=()=>{
@@ -299,7 +364,7 @@ export default function App(){
     const pct=Math.round((score/qs.length)*100);
     setSubmitted(true);
     try{
-      await saveResult({userId:user.id,sectionId:section,level,score,total:qs.length,percentage:pct,answers});
+      await saveResult({userId:user.id,sectionId:resultKey(activeModule,section),level,score,total:qs.length,percentage:pct,answers});
       showToast(`Score: ${score}/${qs.length} (${pct}%)`);
       loadResults(section);
     }catch(e){showToast('Error saving result');}
@@ -309,7 +374,7 @@ export default function App(){
     e.preventDefault();
     const fd=new FormData(e.target);
     try{
-      await saveFeedback({userId:user.id,sectionId:section||'final',difficulty:fd.get('difficulty'),clarity:fd.get('clarity'),suggestion:fd.get('suggestion')});
+      await saveFeedback({userId:user.id,sectionId:resultKey(activeModule,section)||'final',difficulty:fd.get('difficulty'),clarity:fd.get('clarity'),suggestion:fd.get('suggestion')});
       showToast('Feedback submitted!');
       e.target.reset();
     }catch(err){showToast('Error saving feedback');}
@@ -341,6 +406,7 @@ export default function App(){
 
       {!section?(
         <div className="main-card">
+          <button className="btn-home" onClick={resetToWelcome}>← Back to Home</button>
           <div className="hero">
             <h2>{mod.label}</h2>
             <p className="subtitle">{mod.blurb} · {mod.rotationDays}-day rotation · {allTabs.length} tabs</p>
@@ -362,25 +428,37 @@ export default function App(){
               </div>
             );
           })()}
-          <div className="section-grid">
-            {allTabs.map(t=>{
-              const isRotation=modSections.some(s=>s.id===t.id);
-              return(
-                <div key={t.id} className={`section-card ${isRotation?'':'section-card--special'}`} onClick={()=>openSection(t)}>
-                  <div className="section-card__tag">{isRotation?(t.title||t.id):'Special'}</div>
-                  <h3>{isRotation?(t.subtitle||t.title):t.title}</h3>
-                  <p>{isRotation?'':t.subtitle}</p>
-                </div>
-              );
-            })}
-          </div>
+          {groupTabs(allTabs,mod.groups).map(g=>(
+            <div key={g.label||'all'} className="tab-group">
+              {g.label&&<div className="tab-group__head">
+                <span className="tab-group__title">{g.label}</span>
+                <span className="tab-group__count">{g.tabs.length} tabs</span>
+                {g.hint&&<span className="tab-group__hint">{g.hint}</span>}
+              </div>}
+              <div className="section-grid">
+                {g.tabs.map(t=>{
+                  const isRotation=modSections.some(s=>s.id===t.id);
+                  return(
+                    <div key={t.id} className={`section-card ${isRotation?'':'section-card--special'}`} onClick={()=>openSection(t)}>
+                      <div className="section-card__tag">{isRotation?(t.title||t.id):'Special'}</div>
+                      <h3>{isRotation?(t.subtitle||t.title):t.title}</h3>
+                      <p>{isRotation?'':t.subtitle}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
           <div style={{textAlign:'center',marginTop:28}}>
             <button className="btn-admin-link" onClick={()=>setShowAdmin(true)}>Admin Console</button>
           </div>
         </div>
       ):(
         <div className="main-card">
-          <button className="btn-back" onClick={()=>{setSection(null);setSubmitted(false);setAnswers({});setExpandedQ({});}}>← Back to Topics</button>
+          <div className="crumb-row">
+            <button className="btn-home" onClick={resetToWelcome}>← Back to Home</button>
+            <button className="btn-back" onClick={()=>{setSection(null);setSubmitted(false);setAnswers({});setExpandedQ({});}}>← Back to {mod.label} Topics</button>
+          </div>
           <h2>{current?.title}{current?.subtitle ? ': '+current.subtitle : ''}</h2>
 
           <div className="tab-bar">
@@ -429,12 +507,19 @@ export default function App(){
                   ))}
                 </div>
               )}
-              <p className="subtitle" style={{marginBottom:16}}>Click any question to reveal the answer. {qbList.length} questions available.</p>
+              <p className="subtitle" style={{marginBottom:8}}>Click any question to reveal the answer. {qbList.length} questions available.</p>
+              <div className="qb-legend">
+                {['conceptual','scenario','troubleshooting','edge-case'].map(t=>{
+                  const n=qbList.filter(q=>q.type===t).length;
+                  if(n===0)return null;
+                  return <span key={t} className={`qb-badge qb-badge--${t}`}>{QTYPE_LABELS[t]} · {n}</span>;
+                })}
+              </div>
               {qbList.length===0&&<p className="empty">No questions at this level yet.</p>}
               {qbList.map((item,i)=>(
                 <div key={i} className="qb-card" onClick={()=>toggleQ(i)}>
                   <div className="qb-header">
-                    <span className={`qb-badge qb-badge--${item.type}`}>{item.type}</span>
+                    <span className={`qb-badge qb-badge--${item.type}`}>{typeLabel(item.type)}</span>
                     <span className="qb-num">Q{i+1}</span>
                     <span className="qb-expand">{expandedQ[i]?'▲':'▼'}</span>
                   </div>
@@ -460,7 +545,7 @@ export default function App(){
               {getQuizData().length===0&&<p className="empty">No quiz questions for this level yet.</p>}
               {getQuizData().map((q,i)=>(
                 <div key={i} className="quiz-q">
-                  <div className="q-num">Q{i+1}.</div>
+                  <div className="q-num">Q{i+1}.{q.type&&<span className={`qb-badge qb-badge--${normalizeType(q.type)}`} style={{marginLeft:8}}>{typeLabel(q.type)}</span>}</div>
                   <div className="q-text">{q.q}</div>
                   <div className="options">
                     {(q.opts||[]).map((opt,oi)=>(
@@ -550,7 +635,7 @@ function AdminScreen({user,onBack,toast}){
 
   if(denied) return(
     <div className="app">
-      <nav className="navbar"><h1 className="logo">Admin Console</h1><div className="nav-right"><button className="btn-back" onClick={onBack}>← Back</button></div></nav>
+      <nav className="navbar"><h1 className="logo">Admin Console</h1><div className="nav-right"><button className="btn-back btn-back--nav" onClick={onBack}>← Back</button></div></nav>
       <div className="main-card" style={{maxWidth:420,margin:'60px auto'}}>
         <div className="cs-trap"><h4>Access Denied</h4><p>This account isn't authorized for admin access. Contact the platform administrator if you believe this is a mistake.</p></div>
         <button className="btn-back" onClick={onBack} style={{marginTop:12}}>← Back to Hub</button>
@@ -561,7 +646,7 @@ function AdminScreen({user,onBack,toast}){
 
   if(!authed) return(
     <div className="app">
-      <nav className="navbar"><h1 className="logo">Admin Console</h1><div className="nav-right"><button className="btn-back" onClick={onBack}>← Back</button></div></nav>
+      <nav className="navbar"><h1 className="logo">Admin Console</h1><div className="nav-right"><button className="btn-back btn-back--nav" onClick={onBack}>← Back</button></div></nav>
       <div className="main-card" style={{maxWidth:420,margin:'60px auto'}}>
         <h2 style={{marginBottom:16}}>Admin Access</h2>
         <p className="subtitle">Enter the admin PIN to access the dashboard.</p>
@@ -577,7 +662,7 @@ function AdminScreen({user,onBack,toast}){
 
   return(
     <div className="app">
-      <nav className="navbar"><h1 className="logo">Admin Dashboard</h1><div className="nav-right"><button className="btn-back" onClick={onBack}>← Back to Hub</button></div></nav>
+      <nav className="navbar"><h1 className="logo">Admin Dashboard</h1><div className="nav-right"><button className="btn-back btn-back--nav" onClick={onBack}>← Back to Hub</button></div></nav>
       <div className="main-card">
         {loading&&<p className="empty">Loading admin data...</p>}
         {loadErr&&<div className="cs-trap" style={{marginBottom:20}}><h4>Notice</h4><p>{loadErr}</p></div>}
@@ -684,8 +769,8 @@ function ProfileScreen({user,setUser,onBack,showToast,toast}){
   return(
     <div className="app">
       <nav className="navbar">
-        <h1 className="logo">SAP Interview Hub</h1>
-        <div className="nav-right"><button className="btn-back" onClick={onBack}>← Back to Dashboard</button></div>
+        <h1 className="logo" onClick={onBack} style={{cursor:'pointer'}}>SAP Interview Hub</h1>
+        <div className="nav-right"><button className="btn-back btn-back--nav" onClick={onBack}>← Back to Dashboard</button></div>
       </nav>
       <div className="main-card profile-card">
         <div className="profile-header">
@@ -815,7 +900,7 @@ function AuthScreen({onLogin,showToast,toast}){
     <div className="auth-screen">
       <div className="auth-box">
         <h1>SAP Interview Hub</h1>
-        <p className="subtitle">Master SAP SD, FICO and RAR for your next interview</p>
+        <p className="subtitle">Master SAP for your next interview</p>
         <div className="auth-toggle">
           <button className={mode==='login'?'active':''} onClick={()=>setMode('login')}>Login</button>
           <button className={mode==='signup'?'active':''} onClick={()=>setMode('signup')}>Sign Up</button>
