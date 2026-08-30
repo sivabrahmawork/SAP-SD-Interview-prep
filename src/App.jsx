@@ -15,7 +15,7 @@ function simpleHash(str){
   for(let i=0;i<str.length;i++){h=((h<<5)-h+str.charCodeAt(i))|0;}
   return Math.abs(h);
 }
-// Part 6 (FICO Master Build File) — rotation length is per-module, not hardcoded.
+// Part 6 (FICO Master Build File) â€” rotation length is per-module, not hardcoded.
 // SD stays 14 days. FICO = 18 (FI Day 1-10 + CO Day 1-8). RAR = 7 days.
 // Overflow and Integration tabs sit outside the rotation for each.
 const MODULES = {
@@ -367,3 +367,4 @@ function App(){
 }
 
 export default App;
+
