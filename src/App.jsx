@@ -10,7 +10,7 @@ import {FICO_TCODES,FICO_SE16N,FICO_ADVANCED,FICO_FINAL_TEST} from './data/refer
 import {RAR_ADVANCED,RAR_FINAL_TEST} from './data/referenceRar';
 import {signUp,signIn,signOut,saveResult,getResults,saveFeedback,updateProfile,changePassword,adminGetAllUsers,adminGetAllResults,adminGetAllFeedback,isLocalMode,checkIsAdmin,signInWithGoogle,getCurrentUser,subscribeAuthChanges} from './lib/storage';
 
-const ADMIN_PIN='SD2025hub';
+const ADMIN_PIN='SAP2025hub';
 
 // ===========================================================================
 // MODULE REGISTRY
